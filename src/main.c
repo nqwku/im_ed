@@ -10,11 +10,37 @@
 
 #define JPEG_QUALITY 90
 
+int clamp(int value, int min, int max);
+const char* file_format(const char* filename);
 void grayscale(unsigned char *image, int width, int height, int channels);
 void invert(unsigned char *image, int width, int height, int channels);
 void brightness(unsigned char *image, int width, int height, int channels, float brightness);
 void contrast(unsigned char *image, int width, int height, int channels, float factor);
 void sepia(unsigned char *image, int width, int height, int channels); // sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
+
+int main(void) {
+    int width, height, channels;
+    unsigned char *image = stbi_load("image.jpg", &width, &height, &channels, 0);
+
+    if (image == NULL) {
+        printf("Failed to load image.\n");
+        return 1;
+    }
+
+    printf("%s Image: %dx%d, Channels: %d\n", file_format("images.jpeg"), width, height, channels);
+
+    contrast(image, width, height, channels, 1.2);
+
+    stbi_write_jpg("output.jpg", width, height, channels, image, JPEG_QUALITY);
+
+    stbi_image_free(image);
+
+    return 0;
+}
+
+int clamp(int value, int min, int max) {
+    return (value < min) ? min : (value > max) ? max : value;
+}
 
 const char* file_format(const char* filename) {
     FILE* file = fopen(filename, "rb");
@@ -62,25 +88,13 @@ void brightness(unsigned char *image, int width, int height, int channels, float
         image[i] = (image[i] * brightness > 255) ? 255 : image[i] * brightness;
     }
 };
-void contrast(unsigned char *image, int width, int height, int channels, float factor);
+void contrast(unsigned char *image, int width, int height, int channels, float factor) {
+    for (int i = 0; i < width * height * channels; i++) {
+        int tmp_image = (int)image[i];
+        tmp_image = clamp(factor * (tmp_image - 128) + 128, 0, 255);
+        image[i] = (unsigned char)tmp_image;
+    }
+}
+
 void sepia(); // sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
 
-int main(void) {
-    int width, height, channels;
-    unsigned char *image = stbi_load("images.jpeg", &width, &height, &channels, 0);
-
-    if (image == NULL) {
-        printf("Failed to load image.\n");
-        return 1;
-    }
-
-    printf("%s Image: %dx%d, Channels: %d\n", file_format("images.jpeg"), width, height, channels);
-
-    brightness(image, width, height, channels, 1);
-
-    stbi_write_jpg("output.jpg", width, height, channels, image, JPEG_QUALITY);
-
-    stbi_image_free(image);
-
-    return 0;
-}
