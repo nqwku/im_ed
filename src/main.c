@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
+#include <math.h>
+#include <stddef.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -9,14 +10,14 @@
 #include "stb_image_write.h"
 
 #define JPEG_QUALITY 90
+#define CLAMP(x) (((x) > 255) ? 255 : ((x) < 0) ? 0 : (x))
 
-int clamp(int value, int min, int max);
 const char* file_format(const char* filename);
 void grayscale(unsigned char *image, int width, int height, int channels);
 void invert(unsigned char *image, int width, int height, int channels);
 void brightness(unsigned char *image, int width, int height, int channels, float brightness);
 void contrast(unsigned char *image, int width, int height, int channels, float factor);
-void sepia(unsigned char *image, int width, int height, int channels); // sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
+void sepia(unsigned char *image, int width, int height, int channels);
 
 int main(void) {
     int width, height, channels;
@@ -27,8 +28,12 @@ int main(void) {
         return 1;
     }
 
+    #if 0
     printf("%s Image: %dx%d, Channels: %d\n", file_format("images.jpeg"), width, height, channels);
+    #endif
 
+    sepia(image, width, height, channels);
+    brightness(image, width, height, channels, 1.2);
     contrast(image, width, height, channels, 1.2);
 
     stbi_write_jpg("output.jpg", width, height, channels, image, JPEG_QUALITY);
@@ -38,10 +43,7 @@ int main(void) {
     return 0;
 }
 
-int clamp(int value, int min, int max) {
-    return (value < min) ? min : (value > max) ? max : value;
-}
-
+#if 0
 const char* file_format(const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) return "Unknown";
@@ -60,6 +62,7 @@ const char* file_format(const char* filename) {
 
     return "Unknown";
 }
+#endif
 
 void grayscale(unsigned char *image, int width, int height, int channels) {
     for (int y = 0; y < height; y++) {
@@ -91,10 +94,38 @@ void brightness(unsigned char *image, int width, int height, int channels, float
 void contrast(unsigned char *image, int width, int height, int channels, float factor) {
     for (int i = 0; i < width * height * channels; i++) {
         int tmp_image = (int)image[i];
-        tmp_image = clamp(factor * (tmp_image - 128) + 128, 0, 255);
+        tmp_image = CLAMP(factor * (tmp_image - 128) + 128);
         image[i] = (unsigned char)tmp_image;
     }
 }
 
-void sepia(); // sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
+// sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
+// (393, 769, 189)
+// (349, 686, 168)
+// (272, 534, 131)
+
+void sepia(unsigned char *image, int width, int height, int channels) {
+    if (channels != 3 && channels != 4) return;
+
+    static const int c_red[3] = {393, 769, 189};
+    static const int c_green[3] = {349, 686, 168};
+    static const int c_blue[3] = {272, 534, 131};
+
+    for (size_t i = 0; i < width * height; ++i) {
+        const int r = image[0];
+        const int g = image[1];
+        const int b = image[2];
+
+        const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] + 500)  / 1000);
+        const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] + 500)  / 1000);
+        const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] + 500)  / 1000);
+
+        image[0] = sepia_red;
+        image[1] = sepia_green;
+        image[2] = sepia_blue;
+
+        image += channels;
+
+    }
+}
 
