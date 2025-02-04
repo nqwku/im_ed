@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <stddef.h>
+#include <ctype.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -13,13 +13,16 @@
 #define CLAMP(x) (((x) > 255) ? 255 : ((x) < 0) ? 0 : (x))
 
 const char* file_format(const char* filename);
+double tmp_atof(char s[]);
+int is_number(const char *str);
+
 void grayscale(unsigned char *image, int width, int height, int channels);
 void invert(unsigned char *image, int width, int height, int channels);
 void brightness(unsigned char *image, int width, int height, int channels, float brightness);
 void contrast(unsigned char *image, int width, int height, int channels, float factor);
 void sepia(unsigned char *image, int width, int height, int channels);
 
-int main(void) {
+int main(int argc, char *argv[]) {
     int width, height, channels;
     unsigned char *image = stbi_load("image.jpg", &width, &height, &channels, 0);
 
@@ -28,13 +31,10 @@ int main(void) {
         return 1;
     }
 
-    #if 0
-    printf("%s Image: %dx%d, Channels: %d\n", file_format("images.jpeg"), width, height, channels);
-    #endif
+    printf("%s Image: %dx%d, Channels: %d\n", file_format("images.jpg"), width, height, channels);
 
-    sepia(image, width, height, channels);
-    brightness(image, width, height, channels, 1.2);
-    contrast(image, width, height, channels, 1.2);
+
+    
 
     stbi_write_jpg("output.jpg", width, height, channels, image, JPEG_QUALITY);
 
@@ -43,7 +43,7 @@ int main(void) {
     return 0;
 }
 
-#if 0
+
 const char* file_format(const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) return "Unknown";
@@ -62,7 +62,49 @@ const char* file_format(const char* filename) {
 
     return "Unknown";
 }
-#endif
+
+double tmp_atof(char s[]) {
+    double val, power;
+    int i, sign;
+    for(i = 0; isspace(s[i]); i++)
+        ;
+
+    sign = (s[i] == '-') ? -1 : 1;
+
+    if(s[i] == '+' || s[i] == '-') i++;
+
+    for(val = 0.0; isdigit(s[i]); i++)
+        val = 10.0 * val + (s[i] - '0');
+
+    if(s[i] == '.') i++;
+
+    for(power = 1.0; isdigit(s[i]); i++){
+        val = 10.0 * val + (s[i] - '0');
+        power *= 10.0;
+    }
+
+    return sign * val / power;
+}
+
+
+int is_number(const char *str) {
+    int has_dot = 0;
+    for (int i = 0; str[i]; i++) {
+        if (i == 0 && (str[i] == '-' || str[i] == '+')) continue;
+
+        if (str[i] == '.') {
+            if (has_dot) return 0;
+            has_dot = 1;
+            continue;
+        }
+
+        if (!isdigit(str[i])) return 0;
+    }
+
+    return 1;
+}
+
+
 
 void grayscale(unsigned char *image, int width, int height, int channels) {
     for (int y = 0; y < height; y++) {
