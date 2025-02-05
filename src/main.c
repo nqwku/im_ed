@@ -14,40 +14,100 @@
 
 const char* file_format(const char* filename);
 int is_valid_expression(const char* filename);
-double tmp_atof(char s[]);
+double tmp_atof(const char s[]);
 int is_number(const char *str);
 
-void grayscale(unsigned char *image, int width, int height, int channels);
-void invert(unsigned char *image, int width, int height, int channels);
+void grayscale(unsigned char *image, int width, int height, int channels, float param);
+void invert(unsigned char *image, int width, int height, int channels, float param);
 void brightness(unsigned char *image, int width, int height, int channels, float brightness);
 void contrast(unsigned char *image, int width, int height, int channels, float factor);
-void sepia(unsigned char *image, int width, int height, int channels);
+void sepia(unsigned char *image, int width, int height, int channels, float param);
+
+typedef struct {
+    const char *name;
+    void (*func)(unsigned char*, int, int, int, float);
+    int param;
+} Filter;
+
+Filter filter[] = {
+    {"--graycscale", grayscale, 0},
+    {"--invert", invert, 0},
+    {"--brightness", brightness, 1},
+    {"--contrast", contrast, 1},
+    {"--sepia", sepia, 0},
+};
+
+const int num_filters = sizeof(filter) / sizeof(Filter);
 
 int main(int argc, char *argv[]) {
-    int width, height, channels;
 
     printf("argc: %d\n%s\n", argc, file_format(argv[1]));
 
-    int gr_stat = 0; // grayscale status
-    int in_stat = 0; // invert status
-    int br_stat = 0; // brightness status
-    int co_stat = 0; // contrast status
-    int se_stat = 0; // sepia status
-
-    double brightness_value = 1.0;
-    double contrast_value = 1.0;
-
     if(argc < 3) {
-        fprintf(stderr, "Usage: %s input.jpg output.jpg [--filter] [param value (0.5 - 2.0)]\n", argv[0]);
+        fprintf(stderr, "Usage: %s input.jpg output.jpg [--filter] [param value]\n", argv[0]);
+        for (int i = 0; i < num_filters; i++) {
+            fprintf(stderr, "  %s\n", filter[i].name);
+        }
         return 1;
     }
 
-    if(!is_valid_expression(argv[2])) {
+    if( !is_valid_expression(argv[1]) || !is_valid_expression(argv[2])) {
         fprintf(stderr, "Error: only .png & .jpg files support");
         return 1;
     }
 
+    int width, height, channels;
+    unsigned char *image = stbi_load(argv[1], &width, &height, &channels, 0);
+
+    if (image == NULL) {
+        fprintf(stderr, "Error: failed to load image %s. Reason: %s\n", argv[1], stbi_failure_reason());
+        return 1;
+    }
+    printf("%s Image: %dx%d, Channels: %d\n", file_format(argv[1]), width, height, channels);
+
+    for(int i = 3; i < argc; i++) {
+        for (int j = 0; j < num_filters; j++) {
+            if (strcmp(argv[i], filter[j].name) == 0) {
+                float param = 1.0f;
+                if (filter[j].param) {
+                    if (i + 1 >= argc || !is_number(argv[i + 1])) {
+                        fprintf(stderr, "Usage: %s [param value]\n", filter[j].name);
+                        stbi_image_free(image);
+                        return 1;
+                    }
+                    param = tmp_atof(argv[i + 1]);
+                    i++;
+                }
+                filter[j].func(image, width, height, channels, param);
+                break;
+            }
+        }
+    }
+
+    const char *ext = strrchr(argv[2], '.');
+    if (ext !=NULL) {
+        if (strstr(ext, ".jpg") || strstr(ext, ".jpeg")) {
+            if (!stbi_write_jpg(argv[2], width, height, channels, image, JPEG_QUALITY)) {
+                fprintf(stderr, "Failed to write JPEG.\n");
+                return 1;
+            }
+        } else if (strstr(ext, ".png")) {
+            if(!stbi_write_png(argv[2], width, height, channels, image, width * channels)) {
+                fprintf(stderr, "Failed to write PNG.\n");
+                return 1;
+            }
+        }
+    } else {
+        fprintf(stderr, "Failed to open: no extension \n");
+        return 1;
+    }
+    stbi_image_free(image);
+    return 0;
+
+
+#if 0
     if((strcmp(file_format(argv[1]), "JPEG") == 0 || strcmp(file_format(argv[1]), "PNG") == 0)){
+
         unsigned char *image = stbi_load(argv[1], &width, &height, &channels, 0);
         printf("%s Image: %dx%d, Channels: %d\n", file_format(argv[1]), width, height, channels);
 
@@ -137,7 +197,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Only .png & .jpg files support\n");
         return 1;
     }
-    return 0;
+#endif
+    
 }
 
 const char* file_format(const char* filename) {
@@ -165,7 +226,11 @@ int is_valid_expression(const char* filename) {
     return (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0 || strcmp(ext, ".png") == 0);
 }
 
-double tmp_atof(char s[]) {
+double tmp_atof(const char s[]) {
+    if (s == NULL || strlen(s) == 0) {
+        fprintf(stderr, "Error: Invalid input.\n");
+        return 0.0;
+    }
     double val, power;
     int i, sign;
     for(i = 0; isspace(s[i]); i++)
@@ -205,7 +270,7 @@ int is_number(const char *str) {
     return 1;
 }
 
-void grayscale(unsigned char *image, int width, int height, int channels) {
+void grayscale(unsigned char *image, int width, int height, int channels, float param) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int index = (y * width + x) * channels;
@@ -216,7 +281,7 @@ void grayscale(unsigned char *image, int width, int height, int channels) {
     }
 }
 
-void invert(unsigned char *image, int width, int height, int channels) {
+void invert(unsigned char *image, int width, int height, int channels, float param) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int index = (y * width + x) * channels;
@@ -228,11 +293,19 @@ void invert(unsigned char *image, int width, int height, int channels) {
 }
 
 void brightness(unsigned char *image, int width, int height, int channels, float brightness) {
+    if (brightness < 0.1 || brightness > 2.0) {
+        fprintf(stderr, "Error: Brightness must be between 0 and 2.\n");
+        return;
+    }
     for (int i = 0; i < width * height * channels; i++) {
         image[i] = (image[i] * brightness > 255) ? 255 : image[i] * brightness;
     }
 };
 void contrast(unsigned char *image, int width, int height, int channels, float factor) {
+    if (factor < 0.1 || factor > 2.0) {
+        fprintf(stderr, "Error: Contrast must be between 0 and 2.\n");
+        return;
+    }
     for (int i = 0; i < width * height * channels; i++) {
         int tmp_image = (int)image[i];
         tmp_image = CLAMP(factor * (tmp_image - 128) + 128);
@@ -245,8 +318,11 @@ void contrast(unsigned char *image, int width, int height, int channels, float f
 // (349, 686, 168)
 // (272, 534, 131)
 
-void sepia(unsigned char *image, int width, int height, int channels) {
-    if (channels != 3 && channels != 4) return;
+void sepia(unsigned char *image, int width, int height, int channels, float param) {
+    if (channels != 3 && channels != 4) {
+        fprintf(stderr, "Error: Sepia filter requires be 3 or 4 channels.\n");
+        return;
+    }
 
     static const int c_red[3] = {393, 769, 189};
     static const int c_green[3] = {349, 686, 168};
@@ -257,9 +333,9 @@ void sepia(unsigned char *image, int width, int height, int channels) {
         const int g = image[i + 1];
         const int b = image[i + 2];
 
-        const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] + 500)  / 1000);
-        const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] + 500)  / 1000);
-        const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] + 500)  / 1000);
+        const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] )  / 1000);
+        const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] )  / 1000);
+        const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] )  / 1000);
 
         image[i] = sepia_red;
         image[i + 1] = sepia_green;
