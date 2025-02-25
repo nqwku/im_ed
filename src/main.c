@@ -1,3 +1,5 @@
+#include <omp.h>
+
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -12,10 +14,14 @@
 #define JPEG_QUALITY 90
 #define CLAMP(x) (((x) > 255) ? 255 : ((x) < 0) ? 0 : (x))
 
+int use_thread = 1;
+
 const char* file_format(const char* filename);
 int is_valid_expression(const char* filename);
 double tmp_atof(const char s[]);
 int is_number(const char *str);
+double filter_time(void (*func)(unsigned char*, int, int, int, float),
+                   unsigned char *image, int width, int height, int channels, float param);
 
 void grayscale(unsigned char *image, int width, int height, int channels, float param);
 void invert(unsigned char *image, int width, int height, int channels, float param);
@@ -30,7 +36,7 @@ typedef struct {
 } Filter;
 
 Filter filter[] = {
-    {"--graycscale", grayscale, 0},
+    {"--grayscale", grayscale, 0},
     {"--invert", invert, 0},
     {"--brightness", brightness, 1},
     {"--contrast", contrast, 1},
@@ -42,6 +48,10 @@ const int num_filters = sizeof(filter) / sizeof(Filter);
 int main(int argc, char *argv[]) {
 
     printf("argc: %d\n%s\n", argc, file_format(argv[1]));
+    printf("Processing with %d threads\n", omp_get_max_threads());
+
+    int num_threads = omp_get_num_procs();
+    omp_set_num_threads(num_threads);
 
     if(argc < 3) {
         fprintf(stderr, "Usage: %s input.jpg output.jpg [--filter] [param value]\n", argv[0]);
@@ -65,6 +75,18 @@ int main(int argc, char *argv[]) {
     }
     printf("%s Image: %dx%d, Channels: %d\n", file_format(argv[1]), width, height, channels);
 
+    int benchmark_mode = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--benchmark") == 0) {
+            benchmark_mode = 1;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            break;
+        }
+    }
+
     for(int i = 3; i < argc; i++) {
         for (int j = 0; j < num_filters; j++) {
             if (strcmp(argv[i], filter[j].name) == 0) {
@@ -78,7 +100,32 @@ int main(int argc, char *argv[]) {
                     param = tmp_atof(argv[i + 1]);
                     i++;
                 }
-                filter[j].func(image, width, height, channels, param);
+                if (benchmark_mode) {
+                    unsigned char * image_copy = malloc(width * height * channels);
+                    if (!image_copy) {
+                        fprintf(stderr, "Error: failed to allocate memory for image benchmark\n");
+                        continue;
+                    }
+
+                    memcpy(image_copy, image, width * height * channels);
+
+                    use_thread = 1;
+                    double mt_time = filter_time(filter[j].func, image, width, height, channels, param);
+
+                    use_thread = 0;
+                    double st_time = filter_time(filter[j].func, image_copy, width, height, channels, param);
+
+                    use_thread = 1;
+
+                    printf("\n--- Performance Benchmark for %s ---\n", filter[j].name);
+                    printf("Multi-threaded execution time: %.6f seconds\n", mt_time);
+                    printf("Single-threaded execution time: %.6f seconds\n", st_time);
+                    printf("Speedup: %.2fx\n", st_time / mt_time);
+                    printf("------------------------------------------\n");
+
+                    free(image_copy);
+                }else
+                    filter[j].func(image, width, height, channels, param);
                 break;
             }
         }
@@ -103,102 +150,6 @@ int main(int argc, char *argv[]) {
     }
     stbi_image_free(image);
     return 0;
-
-
-#if 0
-    if((strcmp(file_format(argv[1]), "JPEG") == 0 || strcmp(file_format(argv[1]), "PNG") == 0)){
-
-        unsigned char *image = stbi_load(argv[1], &width, &height, &channels, 0);
-        printf("%s Image: %dx%d, Channels: %d\n", file_format(argv[1]), width, height, channels);
-
-        if (image == NULL) {
-            fprintf(stderr, "Failed to load image.\n");
-            return 1;
-        }
-
-        for(int i = 3; i < argc; i++){
-            if(argv[i][0] == '-'){
-                if(strcmp(argv[i], "--grayscale") == 0) gr_stat = 1;
-
-                else if(strcmp(argv[i], "--invert") == 0) in_stat = 1;
-
-                else if(strcmp(argv[i], "--brightness") == 0) {
-                    if(i + 1 >= argc || !is_number(argv[i + 1])){
-                        fprintf(stderr, "Usage: --brightness [param value (0.5 - 2.0)]\n");
-                        return 1;
-                    }
-
-                    brightness_value = tmp_atof(argv[i + 1]);
-
-                    if(brightness_value < 0.5 || brightness_value > 2.0){
-                        fprintf(stderr, "Error, %.1f parameter is out of range\n", brightness_value);
-                        return 1;
-                    }
-                    i++;
-                    br_stat = 1;
-                }
-
-                else if(strcmp(argv[i], "--contrast") == 0) {
-                    if(i + 1 >= argc || !is_number(argv[i + 1])){
-                        fprintf(stderr, "Usage: --contrast [param value (0.5 - 2.0)]\n");
-                        return 1;
-                    }
-
-                    contrast_value = tmp_atof(argv[i + 1]);
-
-                    if(contrast_value < 0.5 || contrast_value > 2.0){
-                        fprintf(stderr, "Error, %.1f parameter is out of range\n", contrast_value);
-                        return 1;
-                    }
-                    i++;
-                    co_stat = 1;
-                }
-
-                else if(strcmp(argv[i], "--sepia") == 0) se_stat = 1;
-
-                else{
-                    fprintf(stderr, "Unknown flag %s\n", argv[i]);
-                    return 1;
-                }
-            }
-            else{
-                fprintf(stderr, "Unsupported flag %s\n", argv[i]);
-                return 1;
-            }
-        }
-
-        if (gr_stat) grayscale(image, width, height, channels);
-        if (in_stat) invert(image, width, height, channels);
-        if (br_stat) brightness(image, width, height, channels, brightness_value);
-        if (co_stat) contrast(image, width, height, channels, contrast_value);
-        if (se_stat) sepia(image, width, height, channels);
-
-        const char *ext = strrchr(argv[2], '.');
-        if (ext !=NULL) {
-            if (strstr(ext, ".jpg") || strstr(ext, ".jpeg")) {
-                if (!stbi_write_jpg(argv[2], width, height, channels, image, 100)) {
-                    fprintf(stderr, "Failed to write JPEG.\n");
-                    return 1;
-                }
-            } else if (strstr(ext, ".png")) {
-                if(!stbi_write_png(argv[2], width, height, channels, image, width * channels)) {
-                    fprintf(stderr, "Failed to write PNG.\n");
-                    return 1;
-                }
-            }
-        } else {
-            fprintf(stderr, "Failed to open: no extencion \n");
-            return 1;
-        }
-        stbi_image_free(image);
-    }
-
-    else{
-        fprintf(stderr, "Only .png & .jpg files support\n");
-        return 1;
-    }
-#endif
-    
 }
 
 const char* file_format(const char* filename) {
@@ -270,24 +221,59 @@ int is_number(const char *str) {
     return 1;
 }
 
+double filter_time(void (*func)(unsigned char*, int, int, int, float),
+                   unsigned char *image, int width, int height, int channels, float param) {
+    double start_time = omp_get_wtime();
+    func(image, width, height, channels, param);
+    double end_time = omp_get_wtime();
+    return end_time - start_time;
+}
+
+
 void grayscale(unsigned char *image, int width, int height, int channels, float param) {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int index = (y * width + x) * channels;
-            image[index + 0] = 0.298f * image[index + 0] + 0.587f * image[index + 1] + 0.114f * image[index + 2];
-            image[index + 1] = 0.298f * image[index + 0] + 0.587f * image[index + 1] + 0.114f * image[index + 2];
-            image[index + 2] = 0.298f * image[index + 0] + 0.587f * image[index + 1] + 0.114f * image[index + 2];
+    if (use_thread){
+#pragma omp parallel for
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                float gray = 0.298f * image[index + 0] + 0.587f * image[index + 1] + 0.114f * image[index + 2];
+                image[index + 0] = gray;
+                image[index + 1] = gray;
+                image[index + 2] = gray;
+            }
+        }
+    } else {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                float gray = 0.298f * image[index + 0] + 0.587f * image[index + 1] + 0.114f * image[index + 2];
+                image[index + 0] = gray;
+                image[index + 1] = gray;
+                image[index + 2] = gray;
+            }
         }
     }
 }
 
 void invert(unsigned char *image, int width, int height, int channels, float param) {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int index = (y * width + x) * channels;
-            image[index + 0] = 255 - image[index + 0];
-            image[index + 1] = 255 - image[index + 1];
-            image[index + 2] = 255 - image[index + 2];
+    if (use_thread){
+#pragma omp parallel for
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                image[index + 0] = 255 - image[index + 0];
+                image[index + 1] = 255 - image[index + 1];
+                image[index + 2] = 255 - image[index + 2];
+            }
+        }
+    } else {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                image[index + 0] = 255 - image[index + 0];
+                image[index + 1] = 255 - image[index + 1];
+                image[index + 2] = 255 - image[index + 2];
+            }
         }
     }
 }
@@ -297,26 +283,52 @@ void brightness(unsigned char *image, int width, int height, int channels, float
         fprintf(stderr, "Error: Brightness must be between 0 and 2.\n");
         return;
     }
-    for (int i = 0; i < width * height * channels; i++) {
-        image[i] = (image[i] * brightness > 255) ? 255 : image[i] * brightness;
+
+    if (use_thread){
+#pragma omp parallel for
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                for (int c = 0; c < 3; c++) {
+                    float new_val = image[index + c] * brightness;
+                    image[index + c] = (new_val > 255) ? 255 : (unsigned char)new_val;
+                }
+            }
+        }
+    } else {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = (y * width + x) * channels;
+                for (int c = 0; c < 3; c++) {
+                    float new_val = image[index + c] * brightness;
+                    image[index + c] = (new_val > 255) ? 255 : (unsigned char)new_val;
+                }
+            }
+        }
     }
 };
+
 void contrast(unsigned char *image, int width, int height, int channels, float factor) {
     if (factor < 0.1 || factor > 2.0) {
         fprintf(stderr, "Error: Contrast must be between 0 and 2.\n");
         return;
     }
-    for (int i = 0; i < width * height * channels; i++) {
-        int tmp_image = (int)image[i];
-        tmp_image = CLAMP(factor * (tmp_image - 128) + 128);
-        image[i] = (unsigned char)tmp_image;
+
+    if (use_thread) {
+#pragma omp parallel for
+        for (int i = 0; i < width * height * channels; i++) {
+            int tmp_image = (int)image[i];
+            tmp_image = CLAMP(factor * (tmp_image - 128) + 128);
+            image[i] = (unsigned char)tmp_image;
+        }
+    } else {
+        for (int i = 0; i < width * height * channels; i++) {
+            int tmp_image = (int)image[i];
+            tmp_image = CLAMP(factor * (tmp_image - 128) + 128);
+            image[i] = (unsigned char)tmp_image;
+        }
     }
 }
-
-// sepiaRed = .393*R + .769*G + .189B | sepiaGreen = .349*R + .686*G + .168B | sepiaBlue= .272*R + .534*G + .131B
-// (393, 769, 189)
-// (349, 686, 168)
-// (272, 534, 131)
 
 void sepia(unsigned char *image, int width, int height, int channels, float param) {
     if (channels != 3 && channels != 4) {
@@ -328,18 +340,36 @@ void sepia(unsigned char *image, int width, int height, int channels, float para
     static const int c_green[3] = {349, 686, 168};
     static const int c_blue[3] = {272, 534, 131};
 
-    for (size_t i = 0; i < width * height * channels; i += channels) {
-        const int r = image[i];
-        const int g = image[i + 1];
-        const int b = image[i + 2];
+    if (use_thread){
+#pragma omp parallel for
+        for (size_t i = 0; i < width * height * channels; i += channels) {
+            const int r = image[i];
+            const int g = image[i + 1];
+            const int b = image[i + 2];
 
-        const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] )  / 1000);
-        const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] )  / 1000);
-        const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] )  / 1000);
+            const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] )  / 1000);
+            const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] )  / 1000);
+            const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] )  / 1000);
 
-        image[i] = sepia_red;
-        image[i + 1] = sepia_green;
-        image[i + 2] = sepia_blue;
+            image[i] = sepia_red;
+            image[i + 1] = sepia_green;
+            image[i + 2] = sepia_blue;
+        }
+    }
+    else {
+        for (size_t i = 0; i < width * height * channels; i += channels) {
+            const int r = image[i];
+            const int g = image[i + 1];
+            const int b = image[i + 2];
+
+            const int sepia_red   = CLAMP((r * c_red[0] + g * c_red[1] + b * c_red[2] )  / 1000);
+            const int sepia_green = CLAMP((r * c_green[0] + g * c_green[1] + b * c_green[2] )  / 1000);
+            const int sepia_blue  = CLAMP((r * c_blue[0] + g * c_blue[1] + b * c_blue[2] )  / 1000);
+
+            image[i] = sepia_red;
+            image[i + 1] = sepia_green;
+            image[i + 2] = sepia_blue;
+        }
     }
 }
 
