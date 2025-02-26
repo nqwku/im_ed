@@ -5,7 +5,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-
 Filter filter[] = {
     {"--grayscale", grayscale_simd, 0},
     {"--invert", invert, 0},

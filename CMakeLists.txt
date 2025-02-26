@@ -5,7 +5,7 @@ set(CMAKE_C_STANDARD 17)
 
 find_package(OpenMP REQUIRED)
 if(OpenMP_C_FOUND)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 ${OpenMP_C_FLAGS}")
 endif()
 
 add_executable(img_ed
