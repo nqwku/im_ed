@@ -1,7 +1,6 @@
 #include "image_utils.h"
 #include <string.h>
 
-
 const char* file_format(const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) return "Unknown";

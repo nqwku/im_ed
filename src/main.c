@@ -6,11 +6,13 @@
 #include <stdlib.h>
 
 Filter filter[] = {
-    {"--grayscale", grayscale_simd, 0},
+    {"--grayscale", grayscale, 0},
     {"--invert", invert, 0},
     {"--brightness", brightness, 1},
     {"--contrast", contrast, 1},
     {"--sepia", sepia, 0},
+    {"--blur", gaussian_blur, 1},
+    {"--edge", edge_detect, 1}
 };
 
 const int num_filters = sizeof(filter) / sizeof(Filter);

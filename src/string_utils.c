@@ -3,7 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 
-
+//!!!!!!
 double tmp_atof(const char s[]) {
     if (s == NULL || strlen(s) == 0) {
         fprintf(stderr, "Error: Invalid input.\n");
