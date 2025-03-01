@@ -4,8 +4,13 @@
 #include <omp.h>
 #include <stdlib.h>
 #include <string.h>
-int use_thread = 1;
+#include <immintrin.h>
+#include <cpuid.h>
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+int use_thread = 1;
 
 double filter_time(void (*func)(unsigned char*, int, int, int, float),
                    unsigned char *image, int width, int height, int channels, float param) {
@@ -15,143 +20,272 @@ double filter_time(void (*func)(unsigned char*, int, int, int, float),
     return end_time - start_time;
 }
 
-static void gaussian_kernel(float *kernel, int radius, float sigma) {
-    float sum = 0.0f;
-    int size = 2 * radius + 1;
+static void box_radii(int boxes[3], float sigma) {
+    float p_width = sqrtf((12.0f * sigma * sigma / 3.0f) + 1.0f);
+    int w = (int)floor(p_width);
+    if (w % 2 == 0) w--;
 
-    for (int i = -radius; i <= radius; i++) {
-        float x = i;
-        kernel[i + radius] = expf(-x * x / (2 * sigma * sigma)) / (sqrtf(2 * M_PI) * sigma);
-        sum += kernel[i + radius];
+    int n = 3;
+
+    float wl = floor(p_width);
+    float wu = wl + 2.0f;
+    float m_p = (12.0f * sigma * sigma - n * wl * wl - 4.0f * n * wl - 3.0f * n) / (-4.0f * wl - 4.0f);
+    float m = round(m_p);
+
+    for(int i = 0; i < n; i++) boxes[i] = (int)((i < m) ? wl : wu);
+    for(int i = 0; i < n; i++) boxes[i] = (boxes[i] - 1) / 2;
+}
+
+static void box_h_blur(unsigned char *src, unsigned char *dst, int width, int height, int channels, int radius) {
+    float iarr = 1.0f / (radius + radius + 1);
+
+    if (use_thread) {
+        #pragma omp parallel for schedule(static)
+        for (int y = 0; y < height; y++) {
+            float val_r, val_g, val_b;
+            int row_offset = y * width * channels;
+
+            val_r = src[row_offset] * (radius + 1);
+            val_g = src[row_offset + 1] * (radius + 1);
+            val_b = src[row_offset + 2] * (radius + 1);
+
+            for (int x = 0; x < radius; x++) {
+                val_r += src[(row_offset + x * channels)];
+                val_g += src[(row_offset + x * channels) + 1];
+                val_b += src[(row_offset + x * channels) + 2];
+            }
+
+            for (int x = 0; x <= radius; x++) {
+                val_r += src[(row_offset + (x + radius) * channels)] - src[row_offset];
+                val_g += src[(row_offset + (x + radius) * channels) + 1] - src[row_offset + 1];
+                val_b += src[(row_offset + (x + radius) * channels) + 2] - src[row_offset + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int x = radius + 1; x < width - radius; x++) {
+                val_r += src[(row_offset + (x + radius) * channels)] - src[(row_offset + (x - radius - 1) * channels)];
+                val_g += src[(row_offset + (x + radius) * channels) + 1] - src[(row_offset + (x - radius - 1) * channels) + 1];
+                val_b += src[(row_offset + (x + radius) * channels) + 2] - src[(row_offset + (x - radius - 1) * channels) + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int x = width - radius; x < width; x++) {
+                val_r += src[(row_offset + (width - 1) * channels)] - src[(row_offset + (x - radius -1) * channels)];
+                val_g += src[(row_offset + (width - 1) * channels) + 1] - src[(row_offset + (x - radius -1) * channels) + 1];
+                val_b += src[(row_offset + (width - 1) * channels) + 2] - src[(row_offset + (x - radius -1) * channels) + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            if (channels == 4) {
+                for (int x = 0; x < width; x++) dst[(row_offset + x * channels) + 3] = src[(row_offset + x * channels) + 3];
+            }
+        }
     }
+    else {
+        for (int y = 0; y < height; y++) {
+            float val_r, val_g, val_b;
+            int row_offset = y * width * channels;
 
-    for (int i = 0; i < size; i++) {
-        kernel[i] /= sum;
+            val_r = src[row_offset] * (radius + 1);
+            val_g = src[row_offset + 1] * (radius + 1);
+            val_b = src[row_offset + 2] * (radius + 1);
+
+            for (int x = 0; x < radius; x++) {
+                val_r += src[(row_offset + x * channels)];
+                val_g += src[(row_offset + x * channels) + 1];
+                val_b += src[(row_offset + x * channels) + 2];
+            }
+
+            for (int x = 0; x <= radius; x++) {
+                val_r += src[(row_offset + (x + radius) * channels)] - src[row_offset];
+                val_g += src[(row_offset + (x + radius) * channels) + 1] - src[row_offset + 1];
+                val_b += src[(row_offset + (x + radius) * channels) + 2] - src[row_offset + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int x = radius + 1; x < width - radius; x++) {
+                val_r += src[(row_offset + (x + radius) * channels)] - src[(row_offset + (x - radius - 1) * channels)];
+                val_g += src[(row_offset + (x + radius) * channels) + 1] - src[(row_offset + (x - radius - 1) * channels) + 1];
+                val_b += src[(row_offset + (x + radius) * channels) + 2] - src[(row_offset + (x - radius - 1) * channels) + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int x = width - radius; x < width; x++) {
+                val_r += src[(row_offset + (width - 1) * channels)] - src[(row_offset + (x - radius -1) * channels)];
+                val_g += src[(row_offset + (width - 1) * channels) + 1] - src[(row_offset + (x - radius -1) * channels) + 1];
+                val_b += src[(row_offset + (width - 1) * channels) + 2] - src[(row_offset + (x - radius -1) * channels) + 2];
+
+                dst[(row_offset + x * channels)] = (unsigned char)(val_r * iarr);
+                dst[(row_offset + x * channels) + 1] = (unsigned char)(val_g * iarr);
+                dst[(row_offset + x * channels) + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            if (channels == 4) {
+                for (int x = 0; x < width; x++) dst[(row_offset + x * channels) + 3] = src[(row_offset + x * channels) + 3];
+            }
+        }
     }
 }
 
-static void horizontal_blur(unsigned char *src, unsigned char *dst, int width, int height, int channels,
-                            float *kernel, int radius) {
-    int kernel_size = 2 * radius + 1;
+static void box_v_blur(unsigned char *src, unsigned char *dst, int width, int height, int channels, int radius) {
+    float iarr = 1.0f / (radius + radius + 1);
+
     if (use_thread) {
-        #pragma omp parallel for schedule(guided)
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float sum[3] = {0};
-                for (int k = -radius; k <= radius; k++) {
-                    int px = x + k;
-                    if (px < 0) px = 0;
-                    if (px >= width) px = width - 1;
-                    int idx = (y * width + px) * channels;
-                    float weight = kernel[k + radius];
-                    sum[0] += src[idx] * weight;
-                    sum[1] += src[idx + 1] * weight;
-                    sum[2] += src[idx + 2] * weight;
+        #pragma omp parallel for schedule(static)
+        for (int x = 0; x < width; x++) {
+
+            float val_r, val_g, val_b;
+            int col_offset = x * channels;
+
+            val_r = src[col_offset] * (radius + 1);
+            val_g = src[col_offset + 1] * (radius + 1);
+            val_b = src[col_offset + 2] * (radius + 1);
+
+            for (int y = 0; y < radius; y++) {
+                val_r += src[(y * width + x) * channels];
+                val_g += src[(y * width + x) * channels + 1];
+                val_b += src[(y * width + x) * channels + 2];
+            }
+
+            for (int y = 0; y <= radius; y++) {
+                val_r += src[((y + radius) * width + x) * channels] - src[col_offset];
+                val_g += src[((y + radius) * width + x) * channels + 1] - src[col_offset + 1];
+                val_b += src[((y + radius) * width + x) * channels + 2] - src[col_offset + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int y = radius + 1; y < height - radius; y++) {
+                val_r += src[((y + radius) * width + x) * channels] - src[((y - radius - 1) * width + x) * channels];
+                val_g += src[((y + radius) * width + x) * channels + 1] - src[((y - radius - 1) * width + x) * channels + 1];
+                val_b += src[((y + radius) * width + x) * channels + 2] - src[((y - radius - 1) * width + x) * channels + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int y = height - radius; y < height; y++) {
+                val_r += src[((height - 1) * width + x) * channels] - src[((y - radius - 1) * width + x) * channels];
+                val_g += src[((height - 1) * width + x) * channels + 1] - src[((y - radius - 1) * width + x) * channels + 1];
+                val_b += src[((height - 1) * width + x) * channels + 2] - src[((y - radius - 1) * width + x) * channels + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            if (channels == 4) {
+                for (int y = 0; y < height; y++) {
+                    dst[(y * width + x) * channels + 3] = src[(y * width + x) * channels + 3];
                 }
-                int idx = (y * width + x) * channels;
-                dst[idx] = CLAMP(sum[0]);
-                dst[idx + 1] = CLAMP(sum[1]);
-                dst[idx + 2] = CLAMP(sum[2]);
             }
         }
     } else {
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float sum[3] = {0};
-                for (int k = -radius; k <= radius; k++) {
-                    int px = x + k;
-                    if (px < 0) px = 0;
-                    if (px >= width) px = width - 1;
-                    int idx = (y * width + px) * channels;
-                    float weight = kernel[k + radius];
-                    sum[0] += src[idx] * weight;
-                    sum[1] += src[idx + 1] * weight;
-                    sum[2] += src[idx + 2] * weight;
+        for (int x = 0; x < width; x++) {
+
+            float val_r, val_g, val_b;
+            int col_offset = x * channels;
+
+            val_r = src[col_offset] * (radius + 1);
+            val_g = src[col_offset + 1] * (radius + 1);
+            val_b = src[col_offset + 2] * (radius + 1);
+
+            for (int y = 0; y < radius; y++) {
+                val_r += src[(y * width + x) * channels];
+                val_g += src[(y * width + x) * channels + 1];
+                val_b += src[(y * width + x) * channels + 2];
+            }
+
+            for (int y = 0; y <= radius; y++) {
+                val_r += src[((y + radius) * width + x) * channels] - src[col_offset];
+                val_g += src[((y + radius) * width + x) * channels + 1] - src[col_offset + 1];
+                val_b += src[((y + radius) * width + x) * channels + 2] - src[col_offset + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int y = radius + 1; y < height - radius; y++) {
+                val_r += src[((y + radius) * width + x) * channels] - src[((y - radius - 1) * width + x) * channels];
+                val_g += src[((y + radius) * width + x) * channels + 1] - src[((y - radius - 1) * width + x) * channels + 1];
+                val_b += src[((y + radius) * width + x) * channels + 2] - src[((y - radius - 1) * width + x) * channels + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            for (int y = height - radius; y < height; y++) {
+                val_r += src[((height - 1) * width + x) * channels] - src[((y - radius - 1) * width + x) * channels];
+                val_g += src[((height - 1) * width + x) * channels + 1] - src[((y - radius - 1) * width + x) * channels + 1];
+                val_b += src[((height - 1) * width + x) * channels + 2] - src[((y - radius - 1) * width + x) * channels + 2];
+
+                dst[(y * width + x) * channels] = (unsigned char)(val_r * iarr);
+                dst[(y * width + x) * channels + 1] = (unsigned char)(val_g * iarr);
+                dst[(y * width + x) * channels + 2] = (unsigned char)(val_b * iarr);
+            }
+
+            if (channels == 4) {
+                for (int y = 0; y < height; y++) {
+                    dst[(y * width + x) * channels + 3] = src[(y * width + x) * channels + 3];
                 }
-                int idx = (y * width + x) * channels;
-                dst[idx] = CLAMP(sum[0]);
-                dst[idx + 1] = CLAMP(sum[1]);
-                dst[idx + 2] = CLAMP(sum[2]);
             }
         }
     }
 }
 
-static void vertical_blur(unsigned char *src, unsigned char *dst, int width, int height, int channels,
-                            float *kernel, int radius) {
-    int kernel_size = 2 * radius + 1;
-    if (use_thread) {
-#pragma omp parallel for schedule(guided)
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                float sum[3] = {0};
-                for (int k = -radius; k <= radius; k++) {
-                    int py = y + k;
-                    if (py < 0) py = 0;
-                    if (py >= height) py = height - 1;
-                    int idx = (py * width + x) * channels;
-                    float weight = kernel[k + radius];
-                    sum[0] += src[idx] * weight;
-                    sum[1] += src[idx + 1] * weight;
-                    sum[2] += src[idx + 2] * weight;
-                }
-                int idx = (y * width + x) * channels;
-                dst[idx] = CLAMP(sum[0]);
-                dst[idx + 1] = CLAMP(sum[1]);
-                dst[idx + 2] = CLAMP(sum[2]);
-            }
-        }
-    } else {
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                float sum[3] = {0};
-                for (int k = -radius; k <= radius; k++) {
-                    int py = y + k;
-                    if (py < 0) py = 0;
-                    if (py >= height) py = height - 1;
-                    int idx = (py * width + x) * channels;
-                    float weight = kernel[k + radius];
-                    sum[0] += src[idx] * weight;
-                    sum[1] += src[idx + 1] * weight;
-                    sum[2] += src[idx + 2] * weight;
-                }
-                int idx = (y * width + x) * channels;
-                dst[idx] = CLAMP(sum[0]);
-                dst[idx + 1] = CLAMP(sum[1]);
-                dst[idx + 2] = CLAMP(sum[2]);
-            }
-        }
-    }
+static void box_blur(unsigned char *src, unsigned char *dst, unsigned char *temp,
+                     int width, int height, int channels, int radius) {
+    box_h_blur(src, temp, width, height, channels, radius);
+    box_v_blur(temp, dst, width, height, channels, radius);
 }
 
-void gaussian_blur(unsigned char *image, int width, int height, int channels, float radius) {
-    if (radius < 1.0f || radius > 10.0f) {
-        fprintf(stderr, "Error: Radius must be between 1 and 10.\n");
-        return;
-    }
-    int kernel_radius = (int)ceil(radius);
-    int kernel_size = 2 * kernel_radius + 1;
-
-    float *kernel = (float*)malloc(kernel_size * sizeof(float));
-    if (!kernel) {
-        fprintf(stderr, "Error allocating kernel.\n");
+void gaussian_blur(unsigned char *image, int width, int height, int channels, float sigma) {
+    if (sigma < 1 || sigma > 10.0f) {
+        fprintf(stderr, "Error: Sigma must be between 1 and 10\n");
         return;
     }
 
-    gaussian_kernel(kernel, kernel_radius, radius);
+    int boxes[3];
+    box_radii(boxes, sigma);
 
-    unsigned char *temp = (unsigned char*)malloc(width * height * channels);
-    if (!temp) {
-        fprintf(stderr, "Error: Failed to allocate temporary buffer.\n");
-        free(kernel);
+    unsigned char *temp = (unsigned char *)malloc(width * height * channels);
+    unsigned char *buffer = (unsigned char *)malloc(width * height * channels);
+
+    if (!temp || !buffer) {
+        fprintf(stderr, "Error: Failed tp allocate temporary buffer\n");
+        if (temp) free(temp);
+        if (buffer) free(buffer);
         return;
     }
 
-    horizontal_blur(image, temp, width, height, channels, kernel, kernel_radius);
-    vertical_blur(temp, image, width, height, channels, kernel, kernel_radius);
+    memcpy(buffer, image, width * height * channels);
+    for (int i = 0; i < 3; i++) {
+        box_blur(buffer, image, temp, width, height, channels, boxes[i]);
+        if (i < 2) memcpy(buffer, image, width * height * channels);
+    }
 
     free(temp);
-    free(kernel);
+    free(buffer);
 }
 
 

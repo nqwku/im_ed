@@ -7,8 +7,8 @@
 #define CLAMP(x) (((x) > 255) ? 255 : (((x) < 0) ? 0 : (x)))
 
 #define BLOCK_SIZE 64
-#define CACHE_LINE 64
-
+// #define CACHE_LINE 64
+//
 #define CACHE_BLOCK_SIZE 32
 
 typedef struct {
@@ -25,7 +25,7 @@ int is_number(const char *str);
 double filter_time(void (*func)(unsigned char*, int, int, int, float),
                    unsigned char *image, int width, int height, int channels, float param);
 
-void gaussian_blur(unsigned char *image, int width, int height, int channels, float radius);
+void gaussian_blur(unsigned char *image, int width, int height, int channels, float sigma);
 void edge_detect(unsigned char *image, int width, int height, int channels, float threshold);
 
 void grayscale(unsigned char *image, int width, int height, int channels, float param);
