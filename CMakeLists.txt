@@ -14,7 +14,9 @@ add_executable(img_ed
         include/stb_include.h
         src/file_utils.c
         src/string_utils.c
-        src/filter.c)
+        src/filter.c
+        include/logger.h
+        src/logger.c)
 
 include_directories(include)
 

@@ -4,11 +4,6 @@
 #include <omp.h>
 #include <stdlib.h>
 #include <string.h>
-#include <immintrin.h>
-#include <cpuid.h>
-
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 int use_thread = 1;
 
@@ -288,7 +283,6 @@ void gaussian_blur(unsigned char *image, int width, int height, int channels, fl
     free(buffer);
 }
 
-
 void edge_detect(unsigned char *image, int width, int height, int channels, float threshold) {
     if (threshold < 0.0f || threshold > 255.0f) {
         fprintf(stderr, "Error: Threshold must be between 0 and 255.\n");
@@ -307,26 +301,38 @@ void edge_detect(unsigned char *image, int width, int height, int channels, floa
 
     memcpy(temp, image, width * height * channels);
 
+    const float threshold_squared = threshold * threshold;
+
+    const float r_weight = 0.299f;
+    const float g_weight = 0.587f;
+    const float b_weight = 0.114f;
+
     if (use_thread) {
         #pragma omp parallel for schedule(guided)
-        for (int i = 0; i < width * height; i++) {
-            int idx = i * channels;
-            gray[i] = (unsigned char)(0.299f * temp[idx] + 0.587f * temp[idx + 1] + 0.114f * temp[idx + 2]);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int i = y * width + x;
+                int idx = i * channels;
+                gray[i] = (unsigned char)(r_weight * temp[idx] + g_weight * temp[idx + 1] + b_weight * temp[idx + 2]);
+            }
         }
     } else {
-        for (int i = 0; i < width * height; i++) {
-            int idx = i * channels;
-            gray[i] = (unsigned char)(0.299f * temp[idx] + 0.587f * temp[idx + 1] + 0.114f * temp[idx + 2]);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int i = y * width + x;
+                int idx = i * channels;
+                gray[i] = (unsigned char)(r_weight * temp[idx] + g_weight * temp[idx + 1] + b_weight * temp[idx + 2]);
+            }
         }
     }
 
-    int Gx[3][3] = {
+    const int Gx[3][3] = {
         {-1, 0, 1},
         {-2, 0, 2},
         {-1, 0, 1}
     };
 
-    int Gy[3][3] = {
+    const int Gy[3][3] = {
         { 1,  2,  1},
         { 0,  0,  0},
         {-1, -2, -1}
@@ -334,70 +340,171 @@ void edge_detect(unsigned char *image, int width, int height, int channels, floa
 
     if (use_thread) {
         #pragma omp parallel for schedule(guided)
-        for (int y = 1; y < height - 1; y++) {
-            for (int x = 1; x < width - 1; x++) {
-                float gx = 0.0f, gy = 0.0f;
+        for (int by = 1; by < height - 1; by += CACHE_BLOCK_SIZE) {
+            for (int bx = 1; bx < width - 1; bx += CACHE_BLOCK_SIZE) {
+                int block_h = (by + CACHE_BLOCK_SIZE > height - 1) ? (height - 1 - by) : CACHE_BLOCK_SIZE;
+                int block_w = (bx + CACHE_BLOCK_SIZE > width - 1) ? (width - 1 - bx) : CACHE_BLOCK_SIZE;
 
-                for (int ky = -1; ky <= 1; ky++) {
-                    for (int kx = -1; kx <= 1; kx++) {
-                        int pixel = gray[(y + ky) * width + (x + kx)];
-                        gx += pixel * Gx[ky + 1][kx + 1];
-                        gy += pixel * Gy[ky + 1][kx + 1];
+                for (int y = 0; y < block_h; y++) {
+                    for (int x = 0; x < block_w; x++) {
+                        int img_y = by + y;
+                        int img_x = bx + x;
+
+                        if (img_y == 0 || img_y == height - 1 || img_x == 0 || img_x == width - 1) {
+                            continue;
+                        }
+
+                        int gx = 0, gy = 0;
+
+                        int p00 = gray[(img_y-1) * width + (img_x-1)];
+                        int p01 = gray[(img_y-1) * width + img_x];
+                        int p02 = gray[(img_y-1) * width + (img_x+1)];
+
+                        gx += p00 * Gx[0][0];
+                        gx += p01 * Gx[0][1];
+                        gx += p02 * Gx[0][2];
+
+                        gy += p00 * Gy[0][0];
+                        gy += p01 * Gy[0][1];
+                        gy += p02 * Gy[0][2];
+
+                        int p10 = gray[img_y * width + (img_x-1)];
+                        int p11 = gray[img_y * width + img_x];
+                        int p12 = gray[img_y * width + (img_x+1)];
+
+                        gx += p10 * Gx[1][0];
+                        gx += p11 * Gx[1][1];
+                        gx += p12 * Gx[1][2];
+
+                        gy += p10 * Gy[1][0];
+                        gy += p11 * Gy[1][1];
+                        gy += p12 * Gy[1][2];
+
+                        int p20 = gray[(img_y+1) * width + (img_x-1)];
+                        int p21 = gray[(img_y+1) * width + img_x];
+                        int p22 = gray[(img_y+1) * width + (img_x+1)];
+
+                        gx += p20 * Gx[2][0];
+                        gx += p21 * Gx[2][1];
+                        gx += p22 * Gx[2][2];
+
+                        gy += p20 * Gy[2][0];
+                        gy += p21 * Gy[2][1];
+                        gy += p22 * Gy[2][2];
+
+                        int magnitude_squared = gx * gx + gy * gy;
+
+                        unsigned char edge_value = (magnitude_squared > threshold_squared) ? 255 : 0;
+
+                        int idx = (img_y * width + img_x) * channels;
+
+                        for (int c = 0; c < channels; c++) {
+                            if (channels == 4 && c == 3) {
+                                image[idx + c] = temp[idx + c];
+                            } else {
+                                image[idx + c] = edge_value;
+                            }
+                        }
                     }
                 }
+            }
+        }
 
-                float magnitude = sqrtf(gx * gx + gy * gy);
-
-                int idx = (y * width + x) * channels;
-                unsigned char edge_value = (magnitude > threshold) ? 255 : 0;
-
-                for (int c = 0; c < channels; c++) {
-                    if (channels == 4 && c == 3) {
-                        image[idx + c] = temp[idx + c];
-                    } else {
-                        image[idx + c] = edge_value;
+        #pragma omp parallel for schedule(guided)
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (y == 0 || y == height - 1 || x == 0 || x == width - 1) {
+                    for (int c = 0; c < channels; c++) {
+                        if (channels == 4 && c == 3) {
+                            continue;
+                        }
+                        int idx = (y * width + x) * channels + c;
+                        image[idx] = 0;
                     }
                 }
             }
         }
     } else {
-        for (int y = 1; y < height - 1; y++) {
-            for (int x = 1; x < width - 1; x++) {
-                float gx = 0.0f, gy = 0.0f;
+        for (int by = 1; by < height - 1; by += CACHE_BLOCK_SIZE) {
+            for (int bx = 1; bx < width - 1; bx += CACHE_BLOCK_SIZE) {
+                int block_h = (by + CACHE_BLOCK_SIZE > height - 1) ? (height - 1 - by) : CACHE_BLOCK_SIZE;
+                int block_w = (bx + CACHE_BLOCK_SIZE > width - 1) ? (width - 1 - bx) : CACHE_BLOCK_SIZE;
 
-                for (int ky = -1; ky <= 1; ky++) {
-                    for (int kx = -1; kx <= 1; kx++) {
-                        int pixel = gray[(y + ky) * width + (x + kx)];
-                        gx += pixel * Gx[ky + 1][kx + 1];
-                        gy += pixel * Gy[ky + 1][kx + 1];
-                    }
-                }
+                for (int y = 0; y < block_h; y++) {
+                    for (int x = 0; x < block_w; x++) {
+                        int img_y = by + y;
+                        int img_x = bx + x;
 
-                float magnitude = sqrtf(gx * gx + gy * gy);
+                        if (img_y == 0 || img_y == height - 1 || img_x == 0 || img_x == width - 1) {
+                            continue;
+                        }
 
-                int idx = (y * width + x) * channels;
-                unsigned char edge_value = (magnitude > threshold) ? 255 : 0;
+                        int gx = 0, gy = 0;
 
-                for (int c = 0; c < channels; c++) {
-                    if (channels == 4 && c == 3) {
-                        image[idx + c] = temp[idx + c];
-                    } else {
-                        image[idx + c] = edge_value;
+                        int p00 = gray[(img_y-1) * width + (img_x-1)];
+                        int p01 = gray[(img_y-1) * width + img_x];
+                        int p02 = gray[(img_y-1) * width + (img_x+1)];
+
+                        gx += p00 * Gx[0][0];
+                        gx += p01 * Gx[0][1];
+                        gx += p02 * Gx[0][2];
+
+                        gy += p00 * Gy[0][0];
+                        gy += p01 * Gy[0][1];
+                        gy += p02 * Gy[0][2];
+
+                        int p10 = gray[img_y * width + (img_x-1)];
+                        int p11 = gray[img_y * width + img_x];
+                        int p12 = gray[img_y * width + (img_x+1)];
+
+                        gx += p10 * Gx[1][0];
+                        gx += p11 * Gx[1][1];
+                        gx += p12 * Gx[1][2];
+
+                        gy += p10 * Gy[1][0];
+                        gy += p11 * Gy[1][1];
+                        gy += p12 * Gy[1][2];
+
+                        int p20 = gray[(img_y+1) * width + (img_x-1)];
+                        int p21 = gray[(img_y+1) * width + img_x];
+                        int p22 = gray[(img_y+1) * width + (img_x+1)];
+
+                        gx += p20 * Gx[2][0];
+                        gx += p21 * Gx[2][1];
+                        gx += p22 * Gx[2][2];
+
+                        gy += p20 * Gy[2][0];
+                        gy += p21 * Gy[2][1];
+                        gy += p22 * Gy[2][2];
+
+                        int magnitude_squared = gx * gx + gy * gy;
+
+                        unsigned char edge_value = (magnitude_squared > threshold_squared) ? 255 : 0;
+
+                        int idx = (img_y * width + img_x) * channels;
+
+                        for (int c = 0; c < channels; c++) {
+                            if (channels == 4 && c == 3) {
+                                image[idx + c] = temp[idx + c];
+                            } else {
+                                image[idx + c] = edge_value;
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (y == 0 || y == height - 1 || x == 0 || x == width - 1) {
-                for (int c = 0; c < channels; c++) {
-                    if (channels == 4 && c == 3) {
-                        continue;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (y == 0 || y == height - 1 || x == 0 || x == width - 1) {
+                    for (int c = 0; c < channels; c++) {
+                        if (channels == 4 && c == 3) {
+                            continue;
+                        }
+                        int idx = (y * width + x) * channels + c;
+                        image[idx] = 0;
                     }
-                    int idx = (y * width + x) * channels + c;
-                    image[idx] = 0;
                 }
             }
         }
